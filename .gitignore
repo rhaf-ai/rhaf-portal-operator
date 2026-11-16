@@ -1,0 +1,66 @@
+### IntelliJ IDEA ###
+.idea/modules.xml
+.idea/jarRepositories.xml
+.idea/compiler.xml
+.idea/misc.xml
+.idea/workspace.xml
+.idea/libraries/
+.idea/encodings.xml
+.idea/vcs.xml
+.idea/uiDesigner.xml
+*.iws
+*.iml
+*.ipr
+*aws*.log.*
+*.log
+
+### Eclipse ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### VS Code ###
+.vscode/
+
+### Mac OS ###
+.DS_Store
+
+plans
+.claude/worktrees
+.claude/plans
+.claude/settings.local.json
+working-data/
+.bob/
+/target
+ui/admin/dist/
+ui/admin/node_modules/
+tests/e2e/ui/node_modules/
+tests/e2e/ui/test-results/
+tests/e2e/ui/playwright-report/
+/plugins/
+wanaku.local.yaml
+scripts
+
+### JReleaser ###
+out/
+wanaku.local*.yaml
+
+### Go ###
+/bin/
+/build/
+/coverage.out
+*.test
