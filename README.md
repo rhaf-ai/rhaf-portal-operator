@@ -1,8 +1,9 @@
 # RHAF Portal Operator
 
-RHAF Portal Operator will deploy and manage [RHAF Portal Core](https://github.com/rhaf-ai/rhaf-portal-core)
-on Kubernetes and OpenShift. This initial Go scaffold prints `Hello, RHAF Portal Operator!`
-and exits. CRDs, reconciliation, and cluster test infrastructure will follow in later tasks.
+RHAF Portal Operator manages [RHAF Portal Core](https://github.com/rhaf-ai/rhaf-portal-core)
+on Kubernetes and OpenShift. It defines namespaced installation and MCP endpoint
+resources, and starts controllers that maintain their finalizers. Core workload
+and endpoint registration reconciliation follow in later tasks.
 
 This repository owns the Go operator and its container image. Core owns the Rust
 runtime. The UI and shared test infrastructure belong in separate repositories.
@@ -14,15 +15,30 @@ which matches the Camel K baseline used for this scaffold.
 
 ```bash
 make build
-make run
 make test
 make fmt-check
 make check
 ```
 
 `make build` writes `build/rhaf-portal-operator`. `make test` runs Go tests and
-`go vet`. There are no tests for the greeting. Integration and end-to-end tests
-will be added with the operator implementation.
+`go vet`. Integration and end-to-end tests will be added with workload
+reconciliation.
+
+Generate the API artifacts after changing API markers or types:
+
+```bash
+make generate
+make manifests
+```
+
+Generated CRDs are stored in `config/crd/bases`. Both `RHAFPortalCore` and
+`RHAFMCPServer` are namespaced resources in `rhaf.ai.redhat.com/v1alpha1` and
+provide a `status` subresource. An MCP server declaration identifies the Core
+forward with `metadata.name`; it declares an existing endpoint and does not
+install a workload. `spec.namespaceBase` accepts 1–51 lowercase letters, digits,
+or hyphens, without an edge hyphen. Its status conditions distinguish
+configuration validity, registration, freshness, upstream availability,
+presentation readiness, and optional OLS readiness.
 
 The quality settings come from Camel K: golangci-lint enables all linters with
 explicit exclusions in `.golangci.yml`. Camel K command-specific exceptions are
@@ -30,21 +46,35 @@ removed. `make check` runs the linter and `govulncheck`. `make fmt` applies gofm
 and goimports formatting. Quality targets install pinned tools in the ignored
 `bin/` directory on first use. They require network access.
 
-## Container image
+## Development clusters
 
-The multi-stage `Containerfile` builds a static Go binary and runs it on Fedora
-Minimal 44 as UID 1001 with GID 0. OpenShift can assign a different UID. The
-bootstrap image prints the greeting and exits.
+The operator runs with the service-account credentials supplied by a Kubernetes
+or OpenShift cluster. It reconciles finalizers for `RHAFPortalCore` and
+`RHAFMCPServer`, serves metrics on port 8080, and serves health probes on port
+8081.
 
-Install Podman or Docker. Build and run the native image:
+For Minikube development, start the cluster and deploy the Helm chart:
 
 ```bash
-make build-image IMAGE_TAG=localhost/rhaf-portal-operator:dev
-podman run --rm localhost/rhaf-portal-operator:dev-arm64
+minikube start
+make dev-minikube
 ```
 
-Use `-amd64` on Intel and AMD hosts. Set `CONTAINER_TOOL=docker` on
-`make build-image` to use Docker. Use the same tool to build and run the image.
+For OpenShift Local development, publish an operator image to the OpenShift
+registry, then deploy the Helm chart with its repository and tag:
+
+```bash
+crc start
+eval "$(crc oc-env)"
+oc login -u kubeadmin -p '<CRC password>'
+make dev-openshift-local \
+  HELM_NAMESPACE=rhaf-system \
+  HELM_IMAGE='<OpenShift registry>/rhaf-system/rhaf-portal-operator:dev'
+```
+
+Both targets install the CRDs, namespace-scoped RBAC, and a single manager
+Deployment through the chart in `charts/rhaf-portal-operator`. The packaged
+installation bundle is tracked in issue #8.
 
 Manifest publication requires Podman, including when Docker builds the images.
 Authenticate the build tool with the registry before pushing architecture images.
