@@ -48,10 +48,20 @@ Quality tools are pinned in `Makefile` and installed in `bin/` on first use.
 Do not parallelize resource-intensive build and test jobs. If a required tool is
 missing, run `notify-pushover "Needs to install <tool name>"` and inform the user.
 
-Follow standard Go conventions and `.golangci.yml`. Keep public Go APIs and CRD
-fields compatible when they exist. Document deprecations and migration steps.
+Follow standard Go conventions and `.golangci.yml`. Format code and pass
+`make fmt-check`, `make test`, and `make check` before pushing code changes.
+Keep public Go APIs and CRD field semantics compatible when they exist. Justify
+incompatible changes and provide upgrade notes. Mark deprecated Go fields and
+APIs with `// Deprecated:` comments. Update the relevant schemas and documentation
+with deprecation and migration guidance.
+
+### Generated artifacts
+
 When code generation is introduced, commit generated CRDs, RBAC, clients, and
-deepcopy code with the source changes. Do not claim these generators exist today.
+deepcopy code with the source changes. Change the source and run the generator;
+do not hand-edit generated artifacts. Regenerate documentation derived from code
+when its source changes. Check for uncommitted generated changes after a build.
+Do not claim these generators exist today.
 
 ## Tests and acceptance
 
@@ -59,11 +69,24 @@ deepcopy code with the source changes. Do not claim these generators exist today
 - Do not add tests that only repeat the hello-world implementation.
 - Update documentation with behavior and configuration changes.
 - Run formatting, relevant tests, lint, and vulnerability checks before submission.
-- Use bounded polling for asynchronous tests. Do not use `time.Sleep` to await state.
 - Report checks that could not run and their concrete blockers.
 
 Cluster and end-to-end test infrastructure is deferred. Do not imply a local build
 validates Kubernetes reconciliation or OpenShift deployment.
+
+### Asynchronous Testing: Use `Eventually`, not `time.Sleep`
+
+Do not use `time.Sleep()` to wait for asynchronous state in tests. Fixed sleeps
+make tests slow, flaky, and dependent on timing. Poll for the expected condition
+with a timeout. Use Gomega's `Eventually` in suites that use Gomega, or a bounded
+poll helper in unit tests.
+
+- New tests must not introduce `time.Sleep()` to await state.
+- When modifying an existing test that sleeps to await state, migrate that wait
+  to `Eventually` or a bounded poll helper.
+- Always set an explicit timeout so a failed condition cannot hang the suite.
+- Use a clear assertion or predicate for the expected state.
+- Do not replace a sleep with a busy-wait loop.
 
 ## Containers and CI
 
@@ -78,10 +101,32 @@ Releases also include macOS amd64 and arm64 archives. Registry settings come fro
 
 ## Investigation and review
 
-Before fixing an issue, confirm the failure and read relevant source, history,
-design decisions, and related issues. Check whether a proposed fix reverses an
-intentional design choice. Explain any material conflict before implementation.
-Verify external versions and API behavior against official sources when uncertain.
+### Issue investigation before implementation
+
+Do not implement a fix based only on an issue description or code that appears
+wrong. Confirm the failure and understand why the current behavior exists.
+
+1. Reproduce the problem. Check the report's assumptions and expected behavior.
+2. Run `git log --oneline -- <file>` and `git blame <file>` on affected code.
+   Read the commits and linked issues that explain the current implementation.
+3. Check related issues, PRs, and repository documentation for prior decisions,
+   rejected approaches, and compatibility constraints.
+4. Check whether the proposed fix reverses an intentional design choice. If it
+   does, explain why the reversal is justified in the PR description.
+5. Explain material risks, ambiguities, or conflicts before implementation.
+
+### Knowledge cutoff awareness
+
+Do not make authoritative claims about external projects from training knowledge
+alone. Verify referenced dependency versions and relevant API behavior against
+official sources before relying on or questioning them. State uncertainty when
+verification is not possible.
+
+### Git history review
+
+Apply the same investigation when reviewing PRs. Read relevant history, blame,
+documentation, and related issues. Check that a proposed fix does not silently
+reverse a deliberate behavior or break a public contract.
 
 Review changes to secrets, RBAC, cross-namespace access, endpoint registration,
 and external fetches for changes to trust boundaries. Keep permissions minimal.
