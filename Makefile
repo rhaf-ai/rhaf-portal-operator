@@ -19,7 +19,7 @@ CONTAINER_GROUP ?= rhaf-ai
 IMAGE_TAG ?= $(CONTAINER_REGISTRY)/$(CONTAINER_GROUP)/rhaf-portal-operator:$(VERSION)
 PUSH ?= false
 
-.PHONY: build run test fmt goimport fmt-check lint lint-fix vuln check clean build-image build-image-manifest release-archive
+.PHONY: build run test fmt goimport fmt-check lint lint-fix vuln check clean build-image build-image-manifest test-image-manifest release-archive
 
 build:
 	mkdir -p build
@@ -69,7 +69,10 @@ build-image:
 	CONTAINER_TOOL='$(CONTAINER_TOOL)' IMAGE_TAG='$(IMAGE_TAG)' PUSH='$(PUSH)' ./hack/build-image.sh
 
 build-image-manifest:
-	CONTAINER_TOOL='$(CONTAINER_TOOL)' IMAGE_TAG='$(IMAGE_TAG)' ./hack/build-image-manifest.sh
+	IMAGE_TAG='$(IMAGE_TAG)' ./hack/build-image-manifest.sh
+
+test-image-manifest:
+	./hack/test-build-image-manifest.sh
 
 release-archive:
 	GO='$(GO)' VERSION='$(VERSION)' PLATFORM='$(PLATFORM)' ./hack/release-archive.sh

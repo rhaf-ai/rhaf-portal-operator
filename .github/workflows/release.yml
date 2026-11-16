@@ -129,19 +129,20 @@ jobs:
     needs: [setup, build]
     runs-on: ubuntu-latest
     env:
+      QUAY_USERNAME: ${{ secrets.QUAY_USERNAME }}
+      QUAY_PASSWORD: ${{ secrets.QUAY_PASSWORD }}
       VERSION: ${{ needs.setup.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Login to container registry
-        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
-        with:
-          registry: ${{ env.CONTAINER_REGISTRY }}
-          username: ${{ secrets.QUAY_USERNAME }}
-          password: ${{ secrets.QUAY_PASSWORD }}
+        run: |
+          printf '%s' "$QUAY_PASSWORD" | podman login \
+            --username "$QUAY_USERNAME" --password-stdin \
+            "$CONTAINER_REGISTRY"
       - name: Create and push multi-architecture manifest
         run: |
-          make build-image-manifest CONTAINER_TOOL=docker \
+          make build-image-manifest \
             IMAGE_TAG="${CONTAINER_REGISTRY}/${CONTAINER_GROUP}/rhaf-portal-operator:${VERSION}"
 
   release:

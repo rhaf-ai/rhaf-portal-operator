@@ -43,20 +43,23 @@ make build-image IMAGE_TAG=localhost/rhaf-portal-operator:dev
 podman run --rm localhost/rhaf-portal-operator:dev-arm64
 ```
 
-Use `-amd64` on Intel and AMD hosts. Set `CONTAINER_TOOL=docker` on Make commands
-to use Docker. Use the same tool to build and run the image.
+Use `-amd64` on Intel and AMD hosts. Set `CONTAINER_TOOL=docker` on
+`make build-image` to use Docker. Use the same tool to build and run the image.
 
-To publish a multi-architecture image, authenticate with the registry. Run the
-first command on both Linux amd64 and Linux arm64 hosts. Run the manifest command
-once after both images are available:
+Manifest publication requires Podman, including when Docker builds the images.
+Authenticate the build tool with the registry before pushing architecture images.
+Run the build command on both Linux amd64 and Linux arm64 hosts. Then authenticate
+Podman and run the manifest command once after both images are available:
 
 ```bash
 make build-image PUSH=true IMAGE_TAG=REGISTRY/GROUP/rhaf-portal-operator:TAG
+podman login REGISTRY
 make build-image-manifest IMAGE_TAG=REGISTRY/GROUP/rhaf-portal-operator:TAG
 ```
 
 The build adds an architecture suffix. The manifest publishes the combined tag.
-The manifest command supports Podman and Docker.
+Podman combines all entries from the architecture tags, including tags that are
+themselves image indexes.
 
 ## CI and releases
 

@@ -25,6 +25,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Test manifest publication script
+        run: make test-image-manifest
       - name: Check formatting
         run: make fmt-check
       - name: Check code quality and vulnerabilities
