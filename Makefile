@@ -12,13 +12,14 @@ LINT_GOGC ?= 20
 LINT_DEADLINE ?= 10m
 
 VERSION ?= 0.1.0-dev
+PLATFORM ?= $(shell $(GO) env GOOS)-$(shell $(GO) env GOARCH)
 CONTAINER_TOOL ?= podman
 CONTAINER_REGISTRY ?= quay.io
 CONTAINER_GROUP ?= rhaf-ai
 IMAGE_TAG ?= $(CONTAINER_REGISTRY)/$(CONTAINER_GROUP)/rhaf-portal-operator:$(VERSION)
 PUSH ?= false
 
-.PHONY: build run test fmt goimport fmt-check lint lint-fix vuln check clean build-image build-image-manifest
+.PHONY: build run test fmt goimport fmt-check lint lint-fix vuln check clean build-image build-image-manifest release-archive
 
 build:
 	mkdir -p build
@@ -69,6 +70,9 @@ build-image:
 
 build-image-manifest:
 	CONTAINER_TOOL='$(CONTAINER_TOOL)' IMAGE_TAG='$(IMAGE_TAG)' ./hack/build-image-manifest.sh
+
+release-archive:
+	GO='$(GO)' VERSION='$(VERSION)' PLATFORM='$(PLATFORM)' ./hack/release-archive.sh
 
 clean:
 	rm -rf build dist

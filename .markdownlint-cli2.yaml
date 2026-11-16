@@ -1,0 +1,27 @@
+config:
+  MD004:
+    style: "dash"
+  MD013: false
+  MD024:
+    siblings_only: true
+  MD025: false
+  MD033: false
+  MD036: false
+  MD060: false
+
+globs:
+  - "docs/**/*.md"
+  - "*.md"
+  - "deploy/**/README.md"
+  - "examples/**/README.md"
+  - "sdk/**/README.md"
+
+ignores:
+  - ".oss-ai-helper-rules/**"
+  - ".claude/**"
+  - "CLAUDE.md"
+  - "**/node_modules/**"
+  - "**/target/**"
+  - "out/**"
+  - "plan/**"
+  - "working-data/**"

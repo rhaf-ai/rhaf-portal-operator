@@ -1,0 +1,51 @@
+name: PR Build
+
+on:
+  pull_request:
+    branches:
+      - main
+      - '[0-9]+.[0-9]+.x'
+    paths-ignore:
+      - '**.md'
+      - .claude/**
+      - .github/dependabot.yml
+      - docs/**
+      - LICENSE
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Check formatting
+        run: make fmt-check
+      - name: Check code quality and vulnerabilities
+        run: make check
+
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build
+        run: make build
+      - name: Test
+        run: make test
+      - name: Build container image
+        run: make build-image CONTAINER_TOOL=docker

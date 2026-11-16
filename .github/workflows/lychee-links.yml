@@ -1,0 +1,47 @@
+name: Check Links
+
+on:
+  push:
+    branches:
+      - main
+      - '[0-9]+.[0-9]+.x'
+    paths:
+      - '**/*.md'
+      - '.lycheeignore'
+      - '.markdownlint-cli2.yaml'
+      - '.github/workflows/lychee-links.yml'
+  pull_request:
+    branches:
+      - main
+      - '[0-9]+.[0-9]+.x'
+    paths:
+      - '**/*.md'
+      - '.lycheeignore'
+      - '.markdownlint-cli2.yaml'
+      - '.github/workflows/lychee-links.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  check-links:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check links
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        with:
+          args: >-
+            --no-progress
+            --include-fragments
+            --exclude-path .claude
+            --exclude-path .oss-ai-helper-rules
+            '**/*.md'
+          fail: true
+
+  markdownlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Lint Markdown
+        uses: DavidAnson/markdownlint-cli2-action@696eb3f2509270d7b882d2aa68347bc676e7af34 # v25.0.0

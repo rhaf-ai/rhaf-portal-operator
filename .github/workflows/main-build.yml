@@ -1,0 +1,89 @@
+name: Build Main
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - '[0-9]+.[0-9]+.x'
+      - ci-*
+    paths-ignore:
+      - '**.md'
+      - .claude/**
+      - .github/dependabot.yml
+      - docs/**
+      - LICENSE
+
+permissions:
+  contents: read
+
+concurrency:
+  group: main-build-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CONTAINER_REGISTRY: ${{ vars.CONTAINER_REGISTRY }}
+  CONTAINER_GROUP: ${{ vars.CONTAINER_GROUP }}
+  # Release and CI branches publish under their own names.
+  IMAGE_VERSION: ${{ github.ref_name == 'main' && 'latest' || github.ref_name }}
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Check formatting
+        run: make fmt-check
+      - name: Check code quality and vulnerabilities
+        run: make check
+
+  build:
+    needs: quality
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build
+        run: make build
+      - name: Test
+        run: make test
+      - name: Login to container registry
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ${{ env.CONTAINER_REGISTRY }}
+          username: ${{ secrets.QUAY_USERNAME }}
+          password: ${{ secrets.QUAY_PASSWORD }}
+      - name: Build and push container image
+        run: |
+          make build-image CONTAINER_TOOL=docker PUSH=true \
+            IMAGE_TAG="${CONTAINER_REGISTRY}/${CONTAINER_GROUP}/rhaf-portal-operator:${IMAGE_VERSION}"
+
+  create-manifests:
+    name: Publish multi-architecture container manifest
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Login to container registry
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ${{ env.CONTAINER_REGISTRY }}
+          username: ${{ secrets.QUAY_USERNAME }}
+          password: ${{ secrets.QUAY_PASSWORD }}
+      - name: Create and push multi-architecture manifest
+        run: |
+          make build-image-manifest CONTAINER_TOOL=docker \
+            IMAGE_TAG="${CONTAINER_REGISTRY}/${CONTAINER_GROUP}/rhaf-portal-operator:${IMAGE_VERSION}"

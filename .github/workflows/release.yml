@@ -1,0 +1,173 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release (for example, 0.1.0)
+        required: true
+        type: string
+  push:
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  CONTAINER_REGISTRY: ${{ vars.CONTAINER_REGISTRY }}
+  CONTAINER_GROUP: ${{ vars.CONTAINER_GROUP }}
+
+jobs:
+  setup:
+    name: Resolve release version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Resolve version
+        id: resolve
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          version="${INPUT_VERSION:-${GITHUB_REF_NAME#v}}"
+          version="${version#v}"
+          if [[ ! "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "Version must have the form MAJOR.MINOR.PATCH" >&2
+            exit 1
+          fi
+          tag="v${version}"
+          source_sha=$(git rev-parse HEAD)
+          # Both tag spellings publish the same image version. Reject conflicting source commits.
+          for candidate in "v${version}" "$version"; do
+            if git show-ref --verify --quiet "refs/tags/${candidate}"; then
+              tag_sha=$(git rev-parse "refs/tags/${candidate}^{commit}")
+              if [[ "$tag_sha" != "$source_sha" ]]; then
+                echo "Tag ${candidate} points to ${tag_sha}, but this run builds ${source_sha}" >&2
+                exit 1
+              fi
+              # Reuse an existing unprefixed tag when no v-prefixed tag exists.
+              if ! git show-ref --verify --quiet "refs/tags/v${version}"; then
+                tag="$candidate"
+              fi
+            fi
+          done
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            tag="$GITHUB_REF_NAME"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build (${{ matrix.platform }})
+    needs: setup
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux-x86_64
+            container: true
+          - os: ubuntu-24.04-arm
+            platform: linux-aarch64
+            container: true
+          - os: macos-15-intel
+            platform: macos-x86_64
+            container: false
+          - os: macos-15
+            platform: macos-aarch64
+            container: false
+    env:
+      VERSION: ${{ needs.setup.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Test
+        run: make test
+      - name: Build and package release binary
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: make release-archive
+      - name: Upload release archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: rhaf-portal-operator-${{ matrix.platform }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+      - name: Login to container registry
+        if: matrix.container
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ${{ env.CONTAINER_REGISTRY }}
+          username: ${{ secrets.QUAY_USERNAME }}
+          password: ${{ secrets.QUAY_PASSWORD }}
+      - name: Build and push container image
+        if: matrix.container
+        run: |
+          make build-image CONTAINER_TOOL=docker PUSH=true \
+            IMAGE_TAG="${CONTAINER_REGISTRY}/${CONTAINER_GROUP}/rhaf-portal-operator:${VERSION}"
+
+  create-manifests:
+    name: Publish multi-architecture container manifest
+    needs: [setup, build]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.setup.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Login to container registry
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ${{ env.CONTAINER_REGISTRY }}
+          username: ${{ secrets.QUAY_USERNAME }}
+          password: ${{ secrets.QUAY_PASSWORD }}
+      - name: Create and push multi-architecture manifest
+        run: |
+          make build-image-manifest CONTAINER_TOOL=docker \
+            IMAGE_TAG="${CONTAINER_REGISTRY}/${CONTAINER_GROUP}/rhaf-portal-operator:${VERSION}"
+
+  release:
+    name: Publish release
+    needs: [setup, build, create-manifests]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.setup.outputs.version }}
+      RELEASE_TAG: ${{ needs.setup.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Download release archives
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          path: dist
+          pattern: rhaf-portal-operator-*
+          merge-multiple: true
+      - name: Create checksums
+        working-directory: dist
+        run: sha256sum *.tar.gz > checksums.txt
+      - name: Create GitHub release
+        run: |
+          gh release create "$RELEASE_TAG" dist/*.tar.gz dist/checksums.txt \
+            --target "$GITHUB_SHA" \
+            --title "RHAF Portal Operator ${VERSION}" --generate-notes
