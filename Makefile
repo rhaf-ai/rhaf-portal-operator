@@ -2,7 +2,23 @@
 
 GO ?= go
 LOCALBIN ?= $(CURDIR)/bin
-LINTER_.PHONY: build run test fmt goimport fmt-check lint lint-fix vuln check clean
+LINTER_VERSION ?= v2.14.0
+GOVULNCHECK_VERSION ?= v1.8.0
+GOIMPORTS_VERSION ?= v0.50.0
+LINTER := $(LOCALBIN)/golangci-lint-$(LINTER_VERSION)
+GOVULNCHECK := $(LOCALBIN)/govulncheck-$(GOVULNCHECK_VERSION)
+GOIMPORT := $(LOCALBIN)/goimports-$(GOIMPORTS_VERSION)
+LINT_GOGC ?= 20
+LINT_DEADLINE ?= 10m
+
+VERSION ?= 0.1.0-dev
+CONTAINER_TOOL ?= podman
+CONTAINER_REGISTRY ?= quay.io
+CONTAINER_GROUP ?= rhaf-ai
+IMAGE_TAG ?= $(CONTAINER_REGISTRY)/$(CONTAINER_GROUP)/rhaf-portal-operator:$(VERSION)
+PUSH ?= false
+
+.PHONY: build run test fmt goimport fmt-check lint lint-fix vuln check clean build-image build-image-manifest
 
 build:
 	mkdir -p build
@@ -46,6 +62,13 @@ $(GOIMPORT):
 	mkdir -p $(LOCALBIN)
 	GOBIN=$(LOCALBIN) $(GO) install golang.org/x/tools/cmd/goimports@$(GOIMPORTS_VERSION)
 	mv $(LOCALBIN)/goimports $@
+
+# Native builds use the same architecture suffixes as the published manifest.
+build-image:
+	CONTAINER_TOOL='$(CONTAINER_TOOL)' IMAGE_TAG='$(IMAGE_TAG)' PUSH='$(PUSH)' ./hack/build-image.sh
+
+build-image-manifest:
+	CONTAINER_TOOL='$(CONTAINER_TOOL)' IMAGE_TAG='$(IMAGE_TAG)' ./hack/build-image-manifest.sh
 
 clean:
 	rm -rf build dist

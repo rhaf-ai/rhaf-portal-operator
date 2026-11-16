@@ -1,0 +1,7 @@
+.git
+.github
+.oss-ai-helper-rules
+bin
+build
+dist
+working-data
