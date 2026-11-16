@@ -1,0 +1,34 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "rhaf-portal-operator.fullname" . }}
+rules:
+  - apiGroups:
+      - rhaf.ai.redhat.com
+    resources:
+      - rhafmcpservers
+      - rhafportalcores
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups:
+      - rhaf.ai.redhat.com
+    resources:
+      - rhafmcpservers/status
+      - rhafportalcores/status
+    verbs:
+      - get
+      - update
+      - patch
+  - apiGroups:
+      - rhaf.ai.redhat.com
+    resources:
+      - rhafmcpservers/finalizers
+      - rhafportalcores/finalizers
+    verbs:
+      - update

@@ -6,8 +6,9 @@ and the conventions used by [Wanaku](https://github.com/wanaku-ai/wanaku/blob/ma
 ## Project info
 
 RHAF Portal Operator is the Go operator for RHAF Portal Core on Kubernetes and
-OpenShift. The current scaffold prints a greeting and exits. It has no CRDs,
-controllers, health endpoints, or cluster installation assets yet.
+OpenShift. It provides namespaced `RHAFPortalCore` and `RHAFMCPServer` CRDs,
+their generated RBAC, finalizer-only controllers, and health endpoints. Workload
+and endpoint-registration reconciliation follow in later issues.
 
 - Module: `github.com/rhaf-ai/rhaf-portal-operator`.
 - Go version: read `go.mod`.
@@ -35,13 +36,14 @@ requires manual maintainer review. Keep it uncommitted until explicitly approved
 
 ```bash
 make build           # build/rhaf-portal-operator
-make run             # run the greeting
 make test            # Go tests and go vet
 make fmt             # gofmt and goimports
 make fmt-check       # reject formatting changes
 make lint            # golangci-lint
 make check           # lint and govulncheck
-make build-image     # native Linux image, Podman by default
+make build-image     # build a Linux image for a Kubernetes or OpenShift cluster
+make dev-minikube    # build, deploy, and run in Minikube
+make dev-openshift-local # build, deploy, and run in OpenShift Local
 ```
 
 Quality tools are pinned in `Makefile` and installed in `bin/` on first use.
@@ -57,11 +59,10 @@ with deprecation and migration guidance.
 
 ### Generated artifacts
 
-When code generation is introduced, commit generated CRDs, RBAC, clients, and
-deepcopy code with the source changes. Change the source and run the generator;
-do not hand-edit generated artifacts. Regenerate documentation derived from code
-when its source changes. Check for uncommitted generated changes after a build.
-Do not claim these generators exist today.
+Commit generated CRDs, RBAC, clients, and deepcopy code with the source changes.
+Change the source and run `make generate manifests`; do not hand-edit generated
+artifacts. Regenerate documentation derived from code when its source changes.
+Check for uncommitted generated changes after a build.
 
 ## Tests and acceptance
 
@@ -90,9 +91,12 @@ poll helper in unit tests.
 
 ## Containers and CI
 
-Keep `Containerfile`, `Makefile`, and `hack/` scripts consistent when source layout
+Keep `Containerfile`, `Makefile`, and `scripts/` consistent when source layout
 changes. Runtime images use a non-root UID and root group for OpenShift support.
 Do not add ports or health checks before the process provides those endpoints.
+Use Minikube or OpenShift Local to build, deploy, and run the operator during
+development. The operator requires in-cluster credentials from its service
+account and does not run as a standalone local container.
 
 CI builds Linux amd64 and arm64 images. Manifest publication combines their tags.
 Releases also include macOS amd64 and arm64 archives. Registry settings come from

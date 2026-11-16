@@ -1,0 +1,8 @@
+image: rhaf-portal-operator:dev
+imagePullPolicy: IfNotPresent
+
+serviceAccount:
+  create: true
+  name: ""
+
+resources: {}

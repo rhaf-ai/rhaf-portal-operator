@@ -37,13 +37,13 @@ manifest create --all $IMAGE_TAG docker://$IMAGE_TAG-amd64 docker://$IMAGE_TAG-a
 manifest push --all $IMAGE_TAG docker://$IMAGE_TAG
 EOF
 
-"$root/hack/build-image-manifest.sh"
+"$root/scripts/build-image-manifest.sh"
 diff -u "$work/expected" "$MANIFEST_CALLS"
 
 # A failed source-index import must prevent publication.
 : > "$MANIFEST_CALLS"
 status=0
-FAIL_COMMAND=create "$root/hack/build-image-manifest.sh" || status=$?
+FAIL_COMMAND=create "$root/scripts/build-image-manifest.sh" || status=$?
 [[ $status == 23 ]]
 head -n 2 "$work/expected" > "$work/expected-failure"
 diff -u "$work/expected-failure" "$MANIFEST_CALLS"
@@ -51,7 +51,7 @@ diff -u "$work/expected-failure" "$MANIFEST_CALLS"
 # A failed registry push must fail the job.
 : > "$MANIFEST_CALLS"
 status=0
-FAIL_COMMAND=push "$root/hack/build-image-manifest.sh" || status=$?
+FAIL_COMMAND=push "$root/scripts/build-image-manifest.sh" || status=$?
 [[ $status == 24 ]]
 diff -u "$work/expected" "$MANIFEST_CALLS"
 

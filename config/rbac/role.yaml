@@ -1,0 +1,35 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+- apiGroups:
+  - rhaf.ai.redhat.com
+  resources:
+  - rhafmcpservers
+  - rhafportalcores
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - rhaf.ai.redhat.com
+  resources:
+  - rhafmcpservers/finalizers
+  - rhafportalcores/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - rhaf.ai.redhat.com
+  resources:
+  - rhafmcpservers/status
+  - rhafportalcores/status
+  verbs:
+  - get
+  - patch
+  - update
