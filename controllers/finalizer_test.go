@@ -25,8 +25,7 @@ func TestReconcileFinalizer(t *testing.T) {
 
 	t.Run("adds finalizer", func(t *testing.T) {
 		core := &rhafv1alpha1.RHAFPortalCore{ObjectMeta: metav1.ObjectMeta{Name: "core", Namespace: "test"}}
-		kubeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(core).Build()
-		reconciler := &RHAFPortalCoreReconciler{Client: kubeClient}
+		reconciler, kubeClient := newCoreReconciler(t, core)
 
 		if _, err := reconciler.Reconcile(t.Context(), requestFor(core)); err != nil {
 			t.Fatalf("reconcile: %v", err)

@@ -7,8 +7,9 @@ and the conventions used by [Wanaku](https://github.com/wanaku-ai/wanaku/blob/ma
 
 RHAF Portal Operator is the Go operator for RHAF Portal Core on Kubernetes and
 OpenShift. It provides namespaced `RHAFPortalCore` and `RHAFMCPServer` CRDs,
-their generated RBAC, finalizer-only controllers, and health endpoints. Workload
-and endpoint-registration reconciliation follow in later issues.
+their generated RBAC, the Core workload controller, a finalizer-only MCP server
+controller, and health endpoints. Endpoint-registration reconciliation follows in
+a later issue.
 
 - Module: `github.com/rhaf-ai/rhaf-portal-operator`.
 - Go version: read `go.mod`.
