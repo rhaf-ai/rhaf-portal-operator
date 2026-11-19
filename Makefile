@@ -26,8 +26,34 @@ CONTAINER_REGISTRY ?= quay.io
 CONTAINER_GROUP ?= rhaf-ai
 IMAGE_TAG ?= $(CONTAINER_REGISTRY)/$(CONTAINER_GROUP)/rhaf-portal-operator:$(VERSION)
 PUSH ?= false
+OPENSHIFT_REGISTRY ?=
+OPENSHIFT_INTERNAL_REGISTRY ?= image-registry.openshift-image-registry.svc:5000
+OPENSHIFT_IMAGE_TAG ?= dev
+OPENSHIFT_TLS_VERIFY ?= auto
+OPENSHIFT_PLATFORM ?=
+# Earlier versions deployed HELM_IMAGE on OpenShift. deploy-openshift-local keeps a command-line HELM_IMAGE working.
+ifeq ($(origin HELM_IMAGE),command line)
+OPENSHIFT_HELM_IMAGE ?= $(HELM_IMAGE)
+endif
+OPENSHIFT_HELM_IMAGE ?= $(OPENSHIFT_BUILT_IMAGE)
+CORE_DIR ?= ../rhaf-portal-core
+KUBECTL ?= kubectl
+OC ?= oc
+# dev-openshift-local always deploys the image that image-openshift pushes.
+OPENSHIFT_BUILT_IMAGE = $(OPENSHIFT_INTERNAL_REGISTRY)/$(HELM_NAMESPACE)/rhaf-portal-operator:$(OPENSHIFT_IMAGE_TAG)
 
-.PHONY: build run test fmt goimport fmt-check lint lint-fix vuln check generate manifests helm-lint dev-minikube dev-openshift-local clean build-image build-image-manifest test-image-manifest release-archive
+# helm_deploy installs or upgrades the chart. Arguments: image, pull policy.
+helm_deploy = $(HELM) upgrade --install $(HELM_RELEASE) $(HELM_CHART) --namespace $(HELM_NAMESPACE) --create-namespace \
+	--set image='$(1)' --set imagePullPolicy=$(2)
+# A rebuilt image with the same tag does not change the Deployment. Restart it so the pod uses the new image.
+# Argument: kubectl or oc.
+restart_operator = $(1) rollout restart deployment --namespace $(HELM_NAMESPACE) \
+	-l app.kubernetes.io/name=rhaf-portal-operator,app.kubernetes.io/instance=$(HELM_RELEASE)
+openshift_push = CONTAINER_TOOL='$(CONTAINER_TOOL)' OPENSHIFT_NAMESPACE='$(HELM_NAMESPACE)' OPENSHIFT_REGISTRY='$(OPENSHIFT_REGISTRY)' \
+	OPENSHIFT_IMAGE_TAG='$(OPENSHIFT_IMAGE_TAG)' OPENSHIFT_TLS_VERIFY='$(OPENSHIFT_TLS_VERIFY)' OPENSHIFT_PLATFORM='$(OPENSHIFT_PLATFORM)' \
+	IMAGE_NAME='$(1)' BUILD_CONTEXT='$(2)' CONTAINERFILE='$(2)/Containerfile' ./scripts/push-image-openshift.sh
+
+.PHONY: build run test fmt goimport fmt-check lint lint-fix vuln check generate manifests helm-lint image-local image-minikube image-openshift image-openshift-core dev-minikube dev-openshift-local deploy-openshift-local check-openshift-image clean build-image build-image-manifest test-image-manifest release-archive
 
 build:
 	mkdir -p build
@@ -71,14 +97,42 @@ manifests: $(CONTROLLER_GEN)
 helm-lint:
 	$(HELM) lint $(HELM_CHART)
 
-dev-minikube:
-	minikube image build -t $(HELM_IMAGE) -f Containerfile .
-	$(HELM) upgrade --install $(HELM_RELEASE) $(HELM_CHART) --namespace $(HELM_NAMESPACE) --create-namespace \
-		--set image='$(HELM_IMAGE)' --set imagePullPolicy=$(HELM_IMAGE_PULL_POLICY)
+# image-local builds a single-architecture image in the local Podman or Docker store.
+image-local:
+	$(CONTAINER_TOOL) build -f Containerfile -t $(HELM_IMAGE) .
 
-dev-openshift-local:
-	$(HELM) upgrade --install $(HELM_RELEASE) $(HELM_CHART) --namespace $(HELM_NAMESPACE) --create-namespace \
-		--set image='$(HELM_IMAGE)' --set imagePullPolicy=Always
+# image-minikube builds the image inside the Minikube container runtime.
+image-minikube:
+	minikube image build -t $(HELM_IMAGE) -f Containerfile .
+
+# image-openshift builds the image and pushes it to the OpenShift integrated registry.
+image-openshift:
+	$(call openshift_push,rhaf-portal-operator,.)
+
+# image-openshift-core builds the Core image from CORE_DIR and pushes it to the OpenShift integrated registry.
+image-openshift-core:
+	$(call openshift_push,rhaf-portal-core,$(CORE_DIR))
+
+dev-minikube: image-minikube
+	$(call helm_deploy,$(HELM_IMAGE),$(HELM_IMAGE_PULL_POLICY))
+	$(call restart_operator,$(KUBECTL))
+
+# Fail before the build if the caller asks for an image that this target does not build.
+dev-openshift-local: check-openshift-image image-openshift
+	$(call helm_deploy,$(OPENSHIFT_BUILT_IMAGE),Always)
+	$(call restart_operator,$(OC))
+
+check-openshift-image:
+	@if [ '$(origin HELM_IMAGE)' = 'command line' ] || [ '$(origin OPENSHIFT_HELM_IMAGE)' != 'file' ]; then \
+		echo 'dev-openshift-local deploys the image that it builds: $(OPENSHIFT_BUILT_IMAGE).' >&2; \
+		echo 'To deploy another image, use make deploy-openshift-local OPENSHIFT_HELM_IMAGE=<image>.' >&2; \
+		exit 1; \
+	fi
+
+# deploy-openshift-local deploys the chart without a build. Use it for images that are already in a registry.
+deploy-openshift-local:
+	$(call helm_deploy,$(OPENSHIFT_HELM_IMAGE),Always)
+	$(call restart_operator,$(OC))
 
 $(LINTER):
 	mkdir -p $(LOCALBIN)
