@@ -49,7 +49,7 @@ func main() {
 	manager, err := ctrl.NewManager(config, options)
 	must(err)
 
-	must((&controllers.RHAFPortalCoreReconciler{Client: manager.GetClient()}).SetupWithManager(manager))
+	must((&controllers.RHAFPortalCoreReconciler{Client: manager.GetClient(), APIReader: manager.GetAPIReader()}).SetupWithManager(manager))
 	must((&controllers.RHAFMCPServerReconciler{Client: manager.GetClient()}).SetupWithManager(manager))
 	must(manager.AddHealthzCheck("healthz", healthz.Ping))
 	must(manager.AddReadyzCheck("readyz", healthz.Ping))
