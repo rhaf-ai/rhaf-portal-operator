@@ -135,82 +135,103 @@ The operator creates the PVC once and does not change it later. When you delete
 the `RHAFPortalCore`, Kubernetes deletes the Deployment and Services. The PVC
 stays. Delete the PVC manually to remove Core data.
 
-## Development clusters
+## Container images
 
-The operator runs with the service-account credentials supplied by a Kubernetes
-or OpenShift cluster. It reconciles finalizers for `RHAFPortalCore` and
-`RHAFMCPServer`, serves metrics on port 8080, and serves health probes on port
-8081.
+Each cluster reads images from a different location. Minikube and OpenShift cannot
+see an image in the local Podman or Docker store. Use the workflow for your target:
 
-For Minikube development, start the cluster and deploy the Helm chart:
+| Target | Command | Where the image goes |
+|---|---|---|
+| Local container store | `make image-local` | Podman or Docker on your workstation |
+| Minikube | `make image-minikube` | The Minikube container runtime |
+| OpenShift | `make image-openshift` | The OpenShift integrated registry |
+| Release registry | `make build-image`, `make build-image-manifest` | A remote registry, such as Quay.io |
+
+`make dev-minikube` and `make dev-openshift-local` build the image for their
+cluster, then deploy the chart. See [Development clusters](#development-clusters).
+
+### Build a local image
+
+Build a single-architecture image in the local container store. Podman is the
+default. Set `CONTAINER_TOOL=docker` to use Docker:
+
+```bash
+make image-local
+make image-local CONTAINER_TOOL=docker
+make image-local HELM_IMAGE=localhost/rhaf-portal-operator:dev
+```
+
+The image name comes from `HELM_IMAGE`. The default is
+`quay.io/rhaf-ai/rhaf-portal-operator:dev`. This target does not push the image.
+
+### Build an image for Minikube
+
+Minikube runs its own container runtime. Build the image directly in Minikube:
 
 ```bash
 minikube start
-make dev-minikube
+make image-minikube
 ```
 
-For OpenShift Local development, publish an operator image to the OpenShift
-registry (see [Use the OpenShift registry](#use-the-openshift-registry)), then
-deploy the Helm chart with the internal registry address:
+To copy an image from the local Podman store into Minikube, save it to an archive
+and load the archive:
 
 ```bash
-crc start
-eval "$(crc oc-env)"
-oc login -u kubeadmin -p '<CRC password>'
-make dev-openshift-local \
-  HELM_NAMESPACE=rhaf-system \
-  HELM_IMAGE=image-registry.openshift-image-registry.svc:5000/rhaf-system/rhaf-portal-operator:dev
+make image-local
+podman save -o /tmp/rhaf-portal-operator.tar quay.io/rhaf-ai/rhaf-portal-operator:dev
+minikube image load /tmp/rhaf-portal-operator.tar
 ```
 
-### Use the OpenShift registry
+`make dev-minikube` sets `imagePullPolicy: IfNotPresent`. The cluster uses the
+image in Minikube and does not pull it from Quay.io.
+
+### Build and push an image to OpenShift
 
 The OpenShift integrated registry has two addresses:
 
 - The external route. Use it to push images from your workstation.
 - The internal service, `image-registry.openshift-image-registry.svc:5000`.
-  Use it in pod specifications, such as `HELM_IMAGE` and `spec.image`.
+  Use it in pod specifications, such as `OPENSHIFT_HELM_IMAGE` and `spec.image`.
 
-Get the external route. OpenShift Local enables it by default. On other
-clusters, enable it first:
+OpenShift Local enables the external route by default. On other clusters, enable
+it first:
 
 ```bash
 oc patch configs.imageregistry.operator.openshift.io/cluster \
   --type merge -p '{"spec":{"defaultRoute":true}}'
-REGISTRY=$(oc get route default-route -n openshift-image-registry \
-  -o jsonpath='{.spec.host}')
-echo "$REGISTRY"   # default-route-openshift-image-registry.apps-crc.testing
 ```
 
-Create the project before you push. An image stream exists only in a project.
-Log in to the registry with your OpenShift token:
+Log in with a user token, then build and push the operator image:
 
 ```bash
-oc new-project rhaf-system
-podman login -u "$(oc whoami)" -p "$(oc whoami -t)" --tls-verify=false "$REGISTRY"
+oc login -u kubeadmin -p '<password>' https://api.crc.testing:6443
+make image-openshift
 ```
 
-Build and push the operator and Core images. Build the Core image from a
-`rhaf-portal-core` checkout:
+`make image-openshift` runs this procedure:
+
+1. Gets your token with `oc whoami -t`. A login with a client certificate, such
+   as `system:admin`, has no token and cannot push.
+2. Gets the external registry route. Set `OPENSHIFT_REGISTRY` to skip this step.
+3. Creates the `HELM_NAMESPACE` project (default `rhaf-system`) if it does not
+   exist. An image stream exists only in a project.
+4. Logs in to the registry with the token.
+5. Builds and pushes `<route>/<HELM_NAMESPACE>/rhaf-portal-operator:<OPENSHIFT_IMAGE_TAG>`.
+   The default tag is `dev`.
+
+The build uses the architecture of your workstation. If the cluster nodes use a
+different architecture, set `OPENSHIFT_PLATFORM`, for example
+`OPENSHIFT_PLATFORM=linux/amd64`.
+
+To build and push the Core image from a `rhaf-portal-core` checkout, set
+`CORE_DIR` to the checkout directory:
 
 ```bash
-podman build -t "$REGISTRY/rhaf-system/rhaf-portal-operator:dev" -f Containerfile .
-podman push --tls-verify=false "$REGISTRY/rhaf-system/rhaf-portal-operator:dev"
-
-podman build -t "$REGISTRY/rhaf-system/rhaf-portal-core:dev" \
-  -f ../rhaf-portal-core/Containerfile ../rhaf-portal-core
-podman push --tls-verify=false "$REGISTRY/rhaf-system/rhaf-portal-core:dev"
+make image-openshift-core CORE_DIR=../rhaf-portal-core
 oc get imagestreams -n rhaf-system
 ```
 
-Deploy the chart with the internal service address:
-
-```bash
-make dev-openshift-local \
-  HELM_NAMESPACE=rhaf-system \
-  HELM_IMAGE=image-registry.openshift-image-registry.svc:5000/rhaf-system/rhaf-portal-operator:dev
-```
-
-Use the same internal address for the Core image in the `RHAFPortalCore`:
+Use the internal address for the Core image in the `RHAFPortalCore`:
 
 ```yaml
 spec:
@@ -219,11 +240,28 @@ spec:
 
 Service accounts in `rhaf-system` can pull images from the `rhaf-system` image
 streams. To pull from another project, grant the `system:image-puller` role.
-`--tls-verify=false` accepts the self-signed route certificate of OpenShift Local.
 
-Both targets install the CRDs, namespace-scoped RBAC, and a single manager
-Deployment through the chart in `charts/rhaf-portal-operator`. The packaged
-installation bundle is tracked in issue #8.
+OpenShift Local uses a self-signed certificate for the route. The default
+`OPENSHIFT_TLS_VERIFY=auto` disables TLS verification only for an OpenShift Local
+route (`*.apps-crc.testing`). For all other routes, the targets verify the
+certificate. Set `OPENSHIFT_TLS_VERIFY` to `true` or `false` to override this.
+
+With Docker, you cannot disable TLS verification for one command. Before you use
+`CONTAINER_TOOL=docker` with OpenShift Local, add the route host to
+`insecure-registries` in the Docker daemon configuration, then restart Docker.
+On Linux, the file is `/etc/docker/daemon.json`. On Docker Desktop, use
+**Settings > Docker Engine**:
+
+```json
+{
+  "insecure-registries": ["default-route-openshift-image-registry.apps-crc.testing"]
+}
+```
+
+### Publish multi-architecture images
+
+CI uses these targets to publish release images. They are not necessary for
+local development.
 
 Manifest publication requires Podman, including when Docker builds the images.
 Authenticate the build tool with the registry before pushing architecture images.
@@ -236,9 +274,57 @@ podman login REGISTRY
 make build-image-manifest IMAGE_TAG=REGISTRY/GROUP/rhaf-portal-operator:TAG
 ```
 
-The build adds an architecture suffix. The manifest publishes the combined tag.
-Podman combines all entries from the architecture tags, including tags that are
-themselves image indexes.
+The build adds an architecture suffix, such as `-amd64`. The manifest publishes
+the combined tag. Podman combines all entries from the architecture tags,
+including tags that are themselves image indexes.
+
+## Development clusters
+
+The operator runs with the service-account credentials supplied by a Kubernetes
+or OpenShift cluster. It reconciles finalizers for `RHAFPortalCore` and
+`RHAFMCPServer`, serves metrics on port 8080, and serves health probes on port
+8081.
+
+For Minikube development, start the cluster, then build the image in Minikube and
+deploy the Helm chart:
+
+```bash
+minikube start
+make dev-minikube
+```
+
+For OpenShift Local development, log in, then build and push the image to the
+OpenShift registry and deploy the Helm chart:
+
+```bash
+crc start
+eval "$(crc oc-env)"
+oc login -u kubeadmin -p '<CRC password>'
+make dev-openshift-local
+```
+
+`make dev-openshift-local` deploys the image that it pushed, with the internal
+registry address
+`image-registry.openshift-image-registry.svc:5000/<HELM_NAMESPACE>/rhaf-portal-operator:<OPENSHIFT_IMAGE_TAG>`,
+and `imagePullPolicy: Always`. It stops with an error if you set `HELM_IMAGE` or
+`OPENSHIFT_HELM_IMAGE`.
+
+To deploy an image without a build, use `make deploy-openshift-local`. Set
+`OPENSHIFT_HELM_IMAGE` to select the image. `HELM_IMAGE` on the command line also
+sets it. Use this target if you log in with a client certificate:
+
+```bash
+make deploy-openshift-local OPENSHIFT_HELM_IMAGE=quay.io/rhaf-ai/rhaf-portal-operator:dev
+```
+
+The development targets rebuild the image with the same tag. After the chart is
+deployed, they restart the operator Deployment, so that the pod uses the new
+image. The Minikube target uses `kubectl` for the restart. The OpenShift targets
+use `oc`. Set `KUBECTL` or `OC` to use a different command.
+
+Both targets install the CRDs, namespace-scoped RBAC, and a single manager
+Deployment through the chart in `charts/rhaf-portal-operator`. The packaged
+installation bundle is tracked in issue #8.
 
 ## CI and releases
 

@@ -42,9 +42,13 @@ make fmt             # gofmt and goimports
 make fmt-check       # reject formatting changes
 make lint            # golangci-lint
 make check           # lint and govulncheck
-make build-image     # build a Linux image for a Kubernetes or OpenShift cluster
+make image-local     # build an image in the local Podman or Docker store
+make image-minikube  # build an image in the Minikube container runtime
+make image-openshift # build and push an image to the OpenShift registry
+make build-image     # build a release image with an architecture suffix
 make dev-minikube    # build, deploy, and run in Minikube
-make dev-openshift-local # build, deploy, and run in OpenShift Local
+make dev-openshift-local # build, push, deploy, and run in OpenShift Local
+make deploy-openshift-local # deploy an existing image to OpenShift Local
 ```
 
 Quality tools are pinned in `Makefile` and installed in `bin/` on first use.
