@@ -26,8 +26,8 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: RHAFMCPServer declares an existing MCP server in the Core installation
-          namespace.
+        description: RHAFMCPServer declares an existing MCP server and may be created
+          in any namespace.
         properties:
           apiVersion:
             description: |-

@@ -1,0 +1,35 @@
+apiVersion: coordination.k8s.io/v1
+kind: Lease
+metadata:
+  name: rhaf-portal-operator
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: rhaf-portal-operator-leader-election
+  namespace: kube-system
+rules:
+  - apiGroups:
+      - coordination.k8s.io
+    resources:
+      - leases
+    resourceNames:
+      - rhaf-portal-operator
+    verbs:
+      - get
+      - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: rhaf-portal-operator-leader-election
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: rhaf-portal-operator-leader-election
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "rhaf-portal-operator.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}

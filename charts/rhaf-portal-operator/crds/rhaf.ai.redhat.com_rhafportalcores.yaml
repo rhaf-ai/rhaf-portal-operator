@@ -14,7 +14,7 @@ spec:
     shortNames:
     - rhafcore
     singular: rhafportalcore
-  scope: Namespaced
+  scope: Cluster
   versions:
   - additionalPrinterColumns:
     - jsonPath: .status.conditions[?(@.type=="PresentationReady")].status
@@ -26,8 +26,8 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: RHAFPortalCore is the namespaced installation resource for RHAF
-          Portal Core.
+        description: RHAFPortalCore is the cluster-scoped installation resource for
+          RHAF Portal Core.
         properties:
           apiVersion:
             description: |-

@@ -1,17 +1,16 @@
 # RHAF Portal Operator
 
 RHAF Portal Operator manages [RHAF Portal Core](https://github.com/rhaf-ai/rhaf-portal-core)
-on Kubernetes and OpenShift. It defines namespaced installation and MCP endpoint
-resources. The installation controller runs the Core workload. Endpoint
-registration reconciliation follows in a later task.
+on Kubernetes and OpenShift. It defines a cluster-scoped installation resource
+and namespaced MCP endpoint resources. The installation controller runs the
+Core workload. Endpoint registration reconciliation follows in a later task.
 
 This repository owns the Go operator and its container image. Core owns the Rust
 runtime. The UI and shared test infrastructure belong in separate repositories.
 
 ## Build and run
 
-Install the Go version in `go.mod` and Make. The Go toolchain is pinned to 1.27.4,
-which matches the Camel K baseline used for this scaffold.
+Install Make and the Go version specified in `go.mod`.
 
 ```bash
 make build
@@ -31,39 +30,55 @@ make generate
 make manifests
 ```
 
-Generated CRDs are stored in `config/crd/bases`. Both `RHAFPortalCore` and
-`RHAFMCPServer` are namespaced resources in `rhaf.ai.redhat.com/v1alpha1` and
-provide a `status` subresource. An MCP server declaration identifies the Core
-forward with `metadata.name`; it declares an existing endpoint and does not
-install a workload. `spec.namespaceBase` accepts 1–51 lowercase letters, digits,
+Generated CRDs are stored in `config/crd/bases`. Both resources are in
+`rhaf.ai.redhat.com/v1alpha1` and provide a `status` subresource.
+`RHAFPortalCore` is cluster-scoped.
+A namespaced `RHAFMCPServer` declares an existing endpoint by address.
+`spec.namespaceBase` accepts 1–51 lowercase letters, digits,
 or hyphens, without an edge hyphen. Its status conditions distinguish
 configuration validity, registration, freshness, upstream availability,
 presentation readiness, and optional OLS readiness.
 
-The quality settings come from Camel K: golangci-lint enables all linters with
-explicit exclusions in `.golangci.yml`. Camel K command-specific exceptions are
-removed. `make check` runs the linter and `govulncheck`. `make fmt` applies gofmt
-and goimports formatting. Quality targets install pinned tools in the ignored
+The linter enables all linters with explicit exclusions in `.golangci.yml`.
+`make check` runs the linter and `govulncheck`. `make fmt` applies gofmt and
+goimports formatting. Quality targets install pinned tools in the ignored
 `bin/` directory on first use. They require network access.
 
 ## Install Core
 
-Helm installs the CRDs only on the first installation and does not upgrade them.
-Before you upgrade an existing installation, apply the current CRDs so that
-`RHAFPortalCore` gets the new fields and validation:
+Install one operator release per cluster. The release namespace contains
+the operator and the Core workload, including its PVC and any referenced ConfigMap.
+The chart grants the operator cluster-wide access to the RHAF APIs and limits
+workload permissions to the release namespace. It creates the shared
+`rhaf-portal-operator` leader election Lease in `kube-system` and grants the
+operator access to that Lease. The account that installs the chart needs
+permission to create the cluster-scoped resources and the Lease and its RBAC
+in `kube-system`. Give permission to create or modify `RHAFPortalCore` only to
+trusted administrators because it specifies the Core image.
+
+Install the operator in a new cluster with Helm. Set the image to a
+cluster-scoped operator build that your cluster can pull:
 
 ```bash
-kubectl apply --server-side -f config/crd/bases/
-helm upgrade rhaf-portal-operator charts/rhaf-portal-operator --namespace rhaf-system
+helm install rhaf-portal-operator charts/rhaf-portal-operator \
+  --namespace rhaf-system --create-namespace \
+  --set-string image=REGISTRY/REPOSITORY:TAG
 ```
 
-To use a Wanaku bootstrap configuration, create the ConfigMap first:
+To upgrade an already cluster-scoped release, apply the current CRDs with
+`kubectl apply --server-side -f config/crd/bases/` before you run
+`helm upgrade`. Helm installs the CRDs only on the first installation.
+
+To use a Wanaku bootstrap configuration, create the ConfigMap in the release
+namespace:
 
 ```bash
-kubectl create configmap wanaku --from-file=wanaku.yaml=/path/to/wanaku.yaml
+kubectl create configmap wanaku --namespace rhaf-system --from-file=wanaku.yaml=/path/to/wanaku.yaml
 ```
 
-Create one `RHAFPortalCore` in the namespace that runs Core:
+Create a cluster-scoped `RHAFPortalCore` with any valid Kubernetes name. Omit
+`metadata.namespace`. The operator uses its pod namespace for the Core
+workload. These examples use `rhaf-system`.
 
 ```yaml
 apiVersion: rhaf.ai.redhat.com/v1alpha1
@@ -84,7 +99,7 @@ spec:
       key: wanaku.yaml
 ```
 
-The operator creates these resources:
+The operator creates these resources in its own namespace:
 
 | Resource | Name | Purpose |
 |----------|------|---------|
@@ -119,13 +134,12 @@ with `--wanaku-config`. A change to the key content restarts Core. If the
 ConfigMap or key does not exist, the operator does not create or update the
 Deployment and sets `ConfigValid` to `False`.
 
-Only one installation can be active in a namespace. The installation that owns
-the Core Deployment or Services stays active. If no installation runs it, the oldest
-`RHAFPortalCore` becomes active. When the active installation is deleted, the
-next installation waits until the previous Core pod exits before it starts Core.
-During that time, `CoreAvailable` has the reason `PreviousInstallationCleanup`.
-The operator sets `ConfigValid` to `False` with reason `DuplicateInstallation`
-on the other installations and creates nothing for them.
+Only one Core installation can run in the cluster. The current workload owner
+stays active. If no installation owns the workload, the oldest Core resource
+takes precedence, with the name breaking ties. Other Core resources report
+`DuplicateInstallation` and do not start a workload. When the active resource
+is deleted, the next installation waits for the previous Core pod to exit.
+During cleanup, `CoreAvailable` has the reason `PreviousInstallationCleanup`.
 
 The `CoreAvailable` condition reports Core readiness. While Core is not ready,
 it reports the container failure reason, such as `CrashLoopBackOff`, or the
@@ -134,6 +148,33 @@ it reports the container failure reason, such as `CrashLoopBackOff`, or the
 The operator creates the PVC once and does not change it later. When you delete
 the `RHAFPortalCore`, Kubernetes deletes the Deployment and Services. The PVC
 stays. Delete the PVC manually to remove Core data.
+
+To move Core to another namespace, back up the data and export the Core
+manifest. Delete `RHAFPortalCore` while the original
+operator runs. Wait for the old Core Deployment, Pod, and Services to stop
+before you uninstall the old operator. Install the operator in the new
+namespace, restore the data to the `rhaf-core-data` PVC there, and recreate the
+Core resource. Copy any referenced ConfigMap to the new namespace.
+
+### Declare an MCP endpoint
+
+Create a namespaced `RHAFMCPServer` to declare an existing MCP endpoint.
+The operator watches declarations in all namespaces. Set `spec.address`
+to a URL reachable from Core. For a Service outside the Core namespace,
+qualify the Service name with its namespace.
+
+```yaml
+apiVersion: rhaf.ai.redhat.com/v1alpha1
+kind: RHAFMCPServer
+metadata:
+  name: example-tools
+  namespace: tooling
+spec:
+  address: http://tools.tooling.svc:8080/mcp
+  namespaceBase: example-tools
+```
+
+Endpoint registration reconciliation follows in a later task.
 
 ## Container images
 
@@ -171,15 +212,6 @@ Minikube runs its own container runtime. Build the image directly in Minikube:
 ```bash
 minikube start
 make image-minikube
-```
-
-To copy an image from the local Podman store into Minikube, save it to an archive
-and load the archive:
-
-```bash
-make image-local
-podman save -o /tmp/rhaf-portal-operator.tar quay.io/rhaf-ai/rhaf-portal-operator:dev
-minikube image load /tmp/rhaf-portal-operator.tar
 ```
 
 `make dev-minikube` sets `imagePullPolicy: IfNotPresent`. The cluster uses the
@@ -322,7 +354,7 @@ deployed, they restart the operator Deployment, so that the pod uses the new
 image. The Minikube target uses `kubectl` for the restart. The OpenShift targets
 use `oc`. Set `KUBECTL` or `OC` to use a different command.
 
-Both targets install the CRDs, namespace-scoped RBAC, and a single manager
+Both targets install the CRDs, RBAC, leader election Lease, and a single manager
 Deployment through the chart in `charts/rhaf-portal-operator`. The packaged
 installation bundle is tracked in issue #8.
 

@@ -17,6 +17,7 @@ func TestGeneratedCoreCRDDefaultsAndValidation(t *testing.T) {
 
 	crd := string(contents)
 	for _, expected := range []string{
+		"scope: Cluster",
 		"default: 8080",
 		"default: 8081",
 		"default: 100Mi",
@@ -30,5 +31,8 @@ func TestGeneratedCoreCRDDefaultsAndValidation(t *testing.T) {
 		if !strings.Contains(crd, expected) {
 			t.Errorf("generated CRD does not contain %q", expected)
 		}
+	}
+	if strings.Contains(crd, "self.metadata.name") {
+		t.Error("generated CRD imposes custom validation on metadata.name")
 	}
 }

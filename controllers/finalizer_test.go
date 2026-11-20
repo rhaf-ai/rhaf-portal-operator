@@ -24,7 +24,7 @@ func TestReconcileFinalizer(t *testing.T) {
 	}
 
 	t.Run("adds finalizer", func(t *testing.T) {
-		core := &rhafv1alpha1.RHAFPortalCore{ObjectMeta: metav1.ObjectMeta{Name: "core", Namespace: "test"}}
+		core := testCore()
 		reconciler, kubeClient := newCoreReconciler(t, core)
 
 		if _, err := reconciler.Reconcile(t.Context(), requestFor(core)); err != nil {
@@ -32,7 +32,7 @@ func TestReconcileFinalizer(t *testing.T) {
 		}
 
 		actual := &rhafv1alpha1.RHAFPortalCore{}
-		if err := kubeClient.Get(t.Context(), types.NamespacedName{Name: core.Name, Namespace: core.Namespace}, actual); err != nil {
+		if err := kubeClient.Get(t.Context(), client.ObjectKey{Name: core.Name}, actual); err != nil {
 			t.Fatalf("get core: %v", err)
 		}
 		if !containsString(actual.Finalizers, finalizerName) {
@@ -44,7 +44,7 @@ func TestReconcileFinalizer(t *testing.T) {
 		now := metav1.NewTime(time.Now())
 		server := &rhafv1alpha1.RHAFMCPServer{ObjectMeta: metav1.ObjectMeta{
 			Name:              "server",
-			Namespace:         "test",
+			Namespace:         "tools",
 			Finalizers:        []string{finalizerName},
 			DeletionTimestamp: &now,
 		}}
@@ -56,7 +56,7 @@ func TestReconcileFinalizer(t *testing.T) {
 		}
 
 		actual := &rhafv1alpha1.RHAFMCPServer{}
-		err := kubeClient.Get(t.Context(), types.NamespacedName{Name: server.Name, Namespace: server.Namespace}, actual)
+		err := kubeClient.Get(t.Context(), client.ObjectKeyFromObject(server), actual)
 		if apierrors.IsNotFound(err) {
 			return
 		}

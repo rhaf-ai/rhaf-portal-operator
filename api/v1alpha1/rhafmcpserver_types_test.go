@@ -35,4 +35,7 @@ func TestGeneratedCRDUsesNamespaceBasePattern(t *testing.T) {
 	if !strings.Contains(string(contents), "pattern: "+NamespaceBasePattern) {
 		t.Fatalf("generated CRD does not contain namespaceBase pattern %q", NamespaceBasePattern)
 	}
+	if !strings.Contains(string(contents), "scope: Namespaced") {
+		t.Fatal("generated RHAFMCPServer CRD is not namespaced")
+	}
 }
