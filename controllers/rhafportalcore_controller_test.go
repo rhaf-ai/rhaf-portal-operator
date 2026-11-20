@@ -41,10 +41,9 @@ func newCoreReconciler(t *testing.T, objects ...client.Object) (*RHAFPortalCoreR
 		WithScheme(coreTestScheme(t)).
 		WithObjects(objects...).
 		WithStatusSubresource(&rhafv1alpha1.RHAFPortalCore{}).
-		WithIndex(&rhafv1alpha1.RHAFPortalCore{}, wanakuConfigMapIndex, indexWanakuConfigMap).
 		Build()
 
-	return &RHAFPortalCoreReconciler{Client: kubeClient, APIReader: kubeClient}, kubeClient
+	return &RHAFPortalCoreReconciler{Client: kubeClient, APIReader: kubeClient, WorkloadNamespace: "test"}, kubeClient
 }
 
 func reconcileCore(t *testing.T, reconciler *RHAFPortalCoreReconciler, core *rhafv1alpha1.RHAFPortalCore) {
@@ -57,7 +56,7 @@ func reconcileCore(t *testing.T, reconciler *RHAFPortalCoreReconciler, core *rha
 func getCore(t *testing.T, kubeClient client.Client, name string) *rhafv1alpha1.RHAFPortalCore {
 	t.Helper()
 	core := &rhafv1alpha1.RHAFPortalCore{}
-	if err := kubeClient.Get(t.Context(), types.NamespacedName{Name: name, Namespace: "test"}, core); err != nil {
+	if err := kubeClient.Get(t.Context(), client.ObjectKey{Name: name}, core); err != nil {
 		t.Fatalf("get core %s: %v", name, err)
 	}
 
@@ -131,7 +130,7 @@ func TestReconcileCoreCreatesWorkload(t *testing.T) {
 
 func TestReconcileCoreDoesNotUpdateExistingPVC(t *testing.T) {
 	core := testCore()
-	existing := newDataPVC(core)
+	existing := newDataPVC(core, "test")
 	existing.Labels = map[string]string{"kept": "true"}
 	reconciler, kubeClient := newCoreReconciler(t, core, existing)
 
@@ -196,13 +195,13 @@ func TestReconcileCoreReportsStartupFailure(t *testing.T) {
 	assertCondition(t, actual, rhafv1alpha1.ConditionCoreAvailable, metav1.ConditionFalse, "CrashLoopBackOff")
 }
 
-func TestReconcileCoreRejectsDuplicateInstallation(t *testing.T) {
+func TestReconcileCoreKeepsOnlyOneActiveInstallation(t *testing.T) {
 	first := testCore()
-	first.CreationTimestamp = metav1.NewTime(time.Now().Add(-time.Hour))
+	first.CreationTimestamp = metav1.NewTime(time.Now().Add(-time.Minute))
 	second := testCore()
-	second.Name = "second"
+	second.Name = "another-core"
 	second.UID = "second-uid"
-	second.CreationTimestamp = metav1.NewTime(time.Now())
+	second.CreationTimestamp = metav1.Now()
 	reconciler, kubeClient := newCoreReconciler(t, first, second)
 
 	reconcileCore(t, reconciler, second)
@@ -210,19 +209,36 @@ func TestReconcileCoreRejectsDuplicateInstallation(t *testing.T) {
 	if exists(t, kubeClient, "rhaf-core", &appsv1.Deployment{}) {
 		t.Fatal("duplicate installation created a deployment")
 	}
-	assertCondition(t, getCore(t, kubeClient, "second"), rhafv1alpha1.ConditionConfigValid, metav1.ConditionFalse, reasonDuplicateInstallation)
+	assertCondition(t, getCore(t, kubeClient, second.Name), rhafv1alpha1.ConditionConfigValid, metav1.ConditionFalse, reasonDuplicateInstallation)
 
-	// The waiting installation takes over after the active one is removed.
-	if err := kubeClient.Delete(t.Context(), getCore(t, kubeClient, first.Name)); err != nil {
-		t.Fatalf("delete first: %v", err)
-	}
-	reconcileCore(t, reconciler, second)
+	reconcileCore(t, reconciler, first)
 	deployment := &appsv1.Deployment{}
 	if !exists(t, kubeClient, "rhaf-core", deployment) {
-		t.Fatal("waiting installation did not take over")
+		t.Fatal("singleton did not create a deployment")
 	}
-	if owner := metav1.GetControllerOf(deployment); owner == nil || owner.UID != second.UID {
-		t.Errorf("deployment owner = %v, want second", owner)
+
+	// The active owner wins even if a contender would sort before it.
+	second = getCore(t, kubeClient, second.Name)
+	second.CreationTimestamp = first.CreationTimestamp
+	if err := kubeClient.Update(t.Context(), second); err != nil {
+		t.Fatalf("update contender: %v", err)
+	}
+	reconcileCore(t, reconciler, second)
+	assertCondition(t, getCore(t, kubeClient, second.Name), rhafv1alpha1.ConditionConfigValid, metav1.ConditionFalse, reasonDuplicateInstallation)
+	if !exists(t, kubeClient, "rhaf-core", deployment) {
+		t.Fatal("active deployment disappeared")
+	}
+	if owner := metav1.GetControllerOf(deployment); owner == nil || owner.UID != first.UID {
+		t.Errorf("deployment controller owner = %v, want %s", owner, first.Name)
+	}
+
+	if err := kubeClient.Delete(t.Context(), getCore(t, kubeClient, first.Name)); err != nil {
+		t.Fatalf("delete first Core: %v", err)
+	}
+	reconcileCore(t, reconciler, first)
+	requests := reconciler.remainingCores(t.Context(), first)
+	if len(requests) != 1 || requests[0].NamespacedName != (client.ObjectKey{Name: second.Name}) {
+		t.Fatalf("requests after deletion = %v, want %s", requests, second.Name)
 	}
 }
 
@@ -279,14 +295,17 @@ func TestReconcileCoreWanakuConfig(t *testing.T) {
 	})
 
 	t.Run("configmap events map to referencing cores", func(t *testing.T) {
-		other := testCore()
-		other.Name = "other"
-		reconciler, _ := newCoreReconciler(t, core.DeepCopy(), other)
+		reconciler, _ := newCoreReconciler(t, core.DeepCopy())
 		requests := reconciler.coresForConfigMap(t.Context(), &metav1.PartialObjectMetadata{
 			ObjectMeta: metav1.ObjectMeta{Name: "wanaku", Namespace: "test"},
 		})
-		if len(requests) != 1 || requests[0].Name != core.Name {
+		if len(requests) != 1 || requests[0].NamespacedName != (client.ObjectKey{Name: core.Name}) {
 			t.Fatalf("requests = %v, want only %s", requests, core.Name)
+		}
+		if requests := reconciler.coresForConfigMap(t.Context(), &metav1.PartialObjectMetadata{
+			ObjectMeta: metav1.ObjectMeta{Name: "wanaku", Namespace: "other"},
+		}); len(requests) != 0 {
+			t.Fatalf("requests for another namespace = %v, want none", requests)
 		}
 	})
 }
@@ -301,51 +320,12 @@ func TestReconcileCoreDeletionRetainsPVC(t *testing.T) {
 	}
 	reconcileCore(t, reconciler, core)
 
-	if exists(t, kubeClient, core.Name, &rhafv1alpha1.RHAFPortalCore{}) {
-		t.Fatal("core not deleted after finalizer removal")
+	if err := kubeClient.Get(t.Context(), client.ObjectKey{Name: core.Name}, &rhafv1alpha1.RHAFPortalCore{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("get deleted core: %v, want not found", err)
 	}
 	if !exists(t, kubeClient, "rhaf-core-data", &corev1.PersistentVolumeClaim{}) {
 		t.Fatal("pvc removed with the installation")
 	}
-}
-
-func TestSiblingCoresMapper(t *testing.T) {
-	first := testCore()
-	second := testCore()
-	second.Name = "second"
-	elsewhere := testCore()
-	elsewhere.Name = "elsewhere"
-	elsewhere.Namespace = "other"
-	reconciler, _ := newCoreReconciler(t, first, second, elsewhere)
-
-	requests := reconciler.siblingCores(t.Context(), first)
-	if len(requests) != 1 || requests[0].Name != "second" {
-		t.Fatalf("requests = %v, want only second", requests)
-	}
-}
-
-func TestReconcileCoreKeepsIncumbentInstallation(t *testing.T) {
-	// Both objects share a creation second; "b" already runs the workload.
-	created := metav1.NewTime(time.Now().Truncate(time.Second))
-	incumbent := testCore()
-	incumbent.Name = "b"
-	incumbent.UID = "b-uid"
-	incumbent.CreationTimestamp = created
-	challenger := testCore()
-	challenger.Name = "a"
-	challenger.UID = "a-uid"
-	challenger.CreationTimestamp = created
-	reconciler, kubeClient := newCoreReconciler(t, incumbent)
-	reconcileCore(t, reconciler, incumbent)
-	if err := kubeClient.Create(t.Context(), challenger); err != nil {
-		t.Fatalf("create challenger: %v", err)
-	}
-
-	reconcileCore(t, reconciler, challenger)
-	reconcileCore(t, reconciler, incumbent)
-
-	assertCondition(t, getCore(t, kubeClient, "a"), rhafv1alpha1.ConditionConfigValid, metav1.ConditionFalse, reasonDuplicateInstallation)
-	assertCondition(t, getCore(t, kubeClient, "b"), rhafv1alpha1.ConditionConfigValid, metav1.ConditionTrue, reasonValid)
 }
 
 func TestReconcileCoreWaitsForPreviousInstallationCleanup(t *testing.T) {
@@ -384,7 +364,7 @@ func TestReconcileCoreReportsApplyErrorsInStatus(t *testing.T) {
 			return c.Create(ctx, object, opts...)
 		}}).
 		Build()
-	reconciler := &RHAFPortalCoreReconciler{Client: kubeClient, APIReader: kubeClient}
+	reconciler := &RHAFPortalCoreReconciler{Client: kubeClient, APIReader: kubeClient, WorkloadNamespace: "test"}
 
 	if _, err := reconciler.Reconcile(t.Context(), requestFor(core)); err == nil {
 		t.Fatal("reconcile succeeded, want error")
@@ -423,41 +403,5 @@ func TestReconcileCoreWaitsForPreviousCorePods(t *testing.T) {
 	reconcileCore(t, reconciler, core)
 	if !exists(t, kubeClient, "rhaf-core", &appsv1.Deployment{}) {
 		t.Fatal("deployment not created after the previous pod exited")
-	}
-}
-
-func TestReconcileCoreKeepsServiceOwnerAfterDeploymentDeletion(t *testing.T) {
-	older := testCore()
-	older.Name = "older"
-	older.UID = "older-uid"
-	older.CreationTimestamp = metav1.NewTime(time.Now().Add(-time.Hour))
-	newer := testCore()
-	newer.Name = "newer"
-	newer.UID = "newer-uid"
-	newer.CreationTimestamp = metav1.NewTime(time.Now())
-
-	// The newer installation is active and owns every resource.
-	reconciler, kubeClient := newCoreReconciler(t, newer)
-	reconcileCore(t, reconciler, newer)
-	if err := kubeClient.Create(t.Context(), older); err != nil {
-		t.Fatalf("create older: %v", err)
-	}
-
-	// Someone deletes the Deployment. The Services still belong to the newer installation.
-	deployment := &appsv1.Deployment{}
-	exists(t, kubeClient, "rhaf-core", deployment)
-	if err := kubeClient.Delete(t.Context(), deployment); err != nil {
-		t.Fatalf("delete deployment: %v", err)
-	}
-
-	reconcileCore(t, reconciler, older)
-	reconcileCore(t, reconciler, newer)
-
-	assertCondition(t, getCore(t, kubeClient, "older"), rhafv1alpha1.ConditionConfigValid, metav1.ConditionFalse, reasonDuplicateInstallation)
-	if !exists(t, kubeClient, "rhaf-core", deployment) {
-		t.Fatal("deployment not restored")
-	}
-	if owner := metav1.GetControllerOf(deployment); owner == nil || owner.UID != newer.UID {
-		t.Errorf("deployment owner = %v, want newer", owner)
 	}
 }

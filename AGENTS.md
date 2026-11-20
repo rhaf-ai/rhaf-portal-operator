@@ -1,15 +1,14 @@
 # RHAF Portal Operator — AI Agent Guidelines
 
-These guidelines adapt the [Camel K baseline](https://github.com/apache/camel-k/blob/main/AGENTS.md)
-and the conventions used by [Wanaku](https://github.com/wanaku-ai/wanaku/blob/main/AGENTS.md).
+These guidelines use conventions from [Wanaku](https://github.com/wanaku-ai/wanaku/blob/main/AGENTS.md).
 
 ## Project info
 
 RHAF Portal Operator is the Go operator for RHAF Portal Core on Kubernetes and
-OpenShift. It provides namespaced `RHAFPortalCore` and `RHAFMCPServer` CRDs,
-their generated RBAC, the Core workload controller, a finalizer-only MCP server
-controller, and health endpoints. Endpoint-registration reconciliation follows in
-a later issue.
+OpenShift. It provides a cluster-scoped `RHAFPortalCore` CRD and a namespaced
+`RHAFMCPServer` CRD, their generated RBAC, the Core workload controller, a
+finalizer-only MCP server controller, and health endpoints.
+Endpoint-registration reconciliation follows in a later issue.
 
 - Module: `github.com/rhaf-ai/rhaf-portal-operator`.
 - Go version: read `go.mod`.
