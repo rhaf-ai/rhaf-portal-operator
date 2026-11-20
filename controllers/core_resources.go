@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"maps"
+	"strings"
 
 	rhafv1alpha1 "github.com/rhaf-ai/rhaf-portal-operator/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
@@ -15,9 +16,10 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
-// Names of the operator-owned Core resources. One Core installation exists per namespace.
+// Names of the operator-owned Core resources. One Core installation exists per cluster.
 const (
 	coreDeploymentName        = "rhaf-core"
 	coreDataPVCName           = "rhaf-core-data"
@@ -51,7 +53,7 @@ const (
 )
 
 // coreSelectorLabels returns the immutable labels that select the Core pod. They
-// omit the installation name: one Core runs per namespace, and a Deployment adopted
+// omit the installation name: one Core runs per cluster, and a Deployment adopted
 // by a differently named installation must keep a selector that matches its template.
 func coreSelectorLabels() map[string]string {
 	return map[string]string{
@@ -62,7 +64,15 @@ func coreSelectorLabels() map[string]string {
 
 func coreLabels(core *rhafv1alpha1.RHAFPortalCore) map[string]string {
 	labels := coreSelectorLabels()
-	labels["app.kubernetes.io/instance"] = core.Name
+	instance := core.Name
+	if len(instance) > validation.LabelValueMaxLength {
+		// A CR name can be longer than the Kubernetes label value limit.
+		const digestLength = 6
+		digest := sha256.Sum256([]byte(instance))
+		prefix := strings.TrimRight(instance[:validation.LabelValueMaxLength-2*digestLength-1], ".-")
+		instance = prefix + "-" + hex.EncodeToString(digest[:digestLength])
+	}
+	labels["app.kubernetes.io/instance"] = instance
 	labels["app.kubernetes.io/managed-by"] = "rhaf-portal-operator"
 
 	return labels
@@ -257,14 +267,14 @@ func mutateService(service *corev1.Service, core *rhafv1alpha1.RHAFPortalCore, p
 
 // newDataPVC returns the Core data claim. It carries no owner reference so that
 // deleting the installation retains the data.
-func newDataPVC(core *rhafv1alpha1.RHAFPortalCore) *corev1.PersistentVolumeClaim {
+func newDataPVC(core *rhafv1alpha1.RHAFPortalCore, namespace string) *corev1.PersistentVolumeClaim {
 	size := core.Spec.Storage.Size
 	if size.IsZero() {
 		size = resource.MustParse(rhafv1alpha1.DefaultStorageSize)
 	}
 
 	pvc := &corev1.PersistentVolumeClaim{
-		Name: coreDataPVCName, Namespace: core.Namespace, Labels: coreLabels(core),
+		Name: coreDataPVCName, Namespace: namespace, Labels: coreLabels(core),
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 			Resources: corev1.VolumeResourceRequirements{

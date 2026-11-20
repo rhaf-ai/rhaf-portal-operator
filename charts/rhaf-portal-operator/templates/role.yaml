@@ -1,5 +1,5 @@
 apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
+kind: ClusterRole
 metadata:
   name: {{ include "rhaf-portal-operator.fullname" . }}
 rules:
@@ -32,6 +32,13 @@ rules:
       - rhafportalcores/finalizers
     verbs:
       - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "rhaf-portal-operator.fullname" . }}-workload
+  namespace: {{ .Release.Namespace }}
+rules:
   - apiGroups:
       - apps
     resources:

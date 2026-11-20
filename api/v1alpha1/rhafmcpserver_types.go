@@ -56,7 +56,7 @@ type RHAFMCPServerStatus struct {
 // +kubebuilder:printcolumn:name="Registered",type=string,JSONPath=`.status.conditions[?(@.type=="Registered")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
-// RHAFMCPServer declares an existing MCP server in the Core installation namespace.
+// RHAFMCPServer declares an existing MCP server and may be created in any namespace.
 type RHAFMCPServer struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

@@ -1,11 +1,25 @@
 apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
+kind: ClusterRoleBinding
 metadata:
   name: {{ include "rhaf-portal-operator.fullname" . }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
-  kind: Role
+  kind: ClusterRole
   name: {{ include "rhaf-portal-operator.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "rhaf-portal-operator.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "rhaf-portal-operator.fullname" . }}-workload
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "rhaf-portal-operator.fullname" . }}-workload
 subjects:
   - kind: ServiceAccount
     name: {{ include "rhaf-portal-operator.serviceAccountName" . }}

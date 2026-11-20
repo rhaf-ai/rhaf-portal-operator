@@ -142,12 +142,12 @@ const (
 )
 
 // +kubebuilder:object:root=true
-// +kubebuilder:resource:scope=Namespaced,shortName=rhafcore
+// +kubebuilder:resource:scope=Cluster,shortName=rhafcore
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="PresentationReady")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
-// RHAFPortalCore is the namespaced installation resource for RHAF Portal Core.
+// RHAFPortalCore is the cluster-scoped installation resource for RHAF Portal Core.
 type RHAFPortalCore struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

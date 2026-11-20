@@ -6,6 +6,7 @@ package controllers
 import (
 	"maps"
 	"slices"
+	"strings"
 	"testing"
 
 	rhafv1alpha1 "github.com/rhaf-ai/rhaf-portal-operator/api/v1alpha1"
@@ -15,12 +16,26 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 func testCore() *rhafv1alpha1.RHAFPortalCore {
 	return &rhafv1alpha1.RHAFPortalCore{
-		ObjectMeta: metav1.ObjectMeta{Name: "core", Namespace: "test", UID: "core-uid"},
+		ObjectMeta: metav1.ObjectMeta{Name: "example.core", UID: "core-uid"},
 		Spec:       rhafv1alpha1.RHAFPortalCoreSpec{Image: "quay.io/rhaf-ai/rhaf-portal-core:1.0"},
+	}
+}
+
+func TestCoreLabelsAcceptLongResourceNames(t *testing.T) {
+	core := testCore()
+	core.Name = strings.Repeat(strings.Repeat("a", 63)+".", 3) + strings.Repeat("b", 61)
+	label := coreLabels(core)["app.kubernetes.io/instance"]
+	if errs := validation.IsValidLabelValue(label); len(errs) != 0 {
+		t.Fatalf("instance label %q is invalid: %v", label, errs)
+	}
+	core.Name = core.Name[:len(core.Name)-1] + "c"
+	if other := coreLabels(core)["app.kubernetes.io/instance"]; other == label {
+		t.Errorf("distinct names produced the same instance label %q", label)
 	}
 }
 
@@ -189,7 +204,7 @@ func TestMutateService(t *testing.T) {
 
 func TestNewDataPVC(t *testing.T) {
 	core := testCore()
-	pvc := newDataPVC(core)
+	pvc := newDataPVC(core, "test")
 
 	if pvc.Name != "rhaf-core-data" || pvc.Namespace != "test" {
 		t.Errorf("pvc = %s/%s", pvc.Namespace, pvc.Name)
@@ -208,7 +223,7 @@ func TestNewDataPVC(t *testing.T) {
 	}
 
 	core.Spec.Storage = rhafv1alpha1.RHAFPortalCoreStorageSpec{Size: resource.MustParse("5Gi"), StorageClassName: "fast"}
-	pvc = newDataPVC(core)
+	pvc = newDataPVC(core, "test")
 	if size := pvc.Spec.Resources.Requests[corev1.ResourceStorage]; size.Cmp(resource.MustParse("5Gi")) != 0 {
 		t.Errorf("size = %s, want 5Gi", size.String())
 	}
@@ -254,7 +269,8 @@ func TestMutateDeploymentAdoptionKeepsSelectorMatchingTemplate(t *testing.T) {
 	deployment := &appsv1.Deployment{}
 	mutateDeployment(deployment, previous, "")
 
-	mutateDeployment(deployment, testCore(), "")
+	current := testCore()
+	mutateDeployment(deployment, current, "")
 
 	selector, err := metav1.LabelSelectorAsSelector(deployment.Spec.Selector)
 	if err != nil {
@@ -263,8 +279,8 @@ func TestMutateDeploymentAdoptionKeepsSelectorMatchingTemplate(t *testing.T) {
 	if !selector.Matches(labels.Set(deployment.Spec.Template.Labels)) {
 		t.Fatalf("selector %v does not match template labels %v", deployment.Spec.Selector, deployment.Spec.Template.Labels)
 	}
-	if deployment.Spec.Template.Labels["app.kubernetes.io/instance"] != "core" {
-		t.Errorf("template instance label = %q, want core", deployment.Spec.Template.Labels["app.kubernetes.io/instance"])
+	if instance := deployment.Spec.Template.Labels["app.kubernetes.io/instance"]; instance != current.Name {
+		t.Errorf("template instance label = %q, want %q", instance, current.Name)
 	}
 }
 

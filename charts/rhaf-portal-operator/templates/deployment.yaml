@@ -7,6 +7,8 @@ metadata:
     app.kubernetes.io/instance: {{ .Release.Name }}
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ include "rhaf-portal-operator.name" . }}
@@ -22,8 +24,11 @@ spec:
         - name: manager
           image: {{ .Values.image | quote }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
-          args:
-            - --watch-namespace={{ .Release.Namespace }}
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           ports:
             - name: metrics
               containerPort: 8080

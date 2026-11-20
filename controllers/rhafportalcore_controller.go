@@ -22,7 +22,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -42,8 +44,6 @@ const (
 )
 
 const (
-	// wanakuConfigMapIndex indexes RHAFPortalCore objects by referenced ConfigMap name.
-	wanakuConfigMapIndex = "spec.wanakuConfig.configMapRef.name"
 	// unavailableRequeue polls pod state while Core is not available, because pod
 	// failures such as CrashLoopBackOff do not change the Deployment status.
 	unavailableRequeue = 30 * time.Second
@@ -54,6 +54,8 @@ const (
 // RHAFPortalCoreReconciler reconciles a RHAFPortalCore resource.
 type RHAFPortalCoreReconciler struct {
 	client.Client
+
+	WorkloadNamespace string
 
 	// APIReader reads objects that the manager does not cache: ConfigMaps (watched
 	// as metadata only) and Pods.
@@ -104,19 +106,18 @@ func (r *RHAFPortalCoreReconciler) Reconcile(ctx context.Context, request ctrl.R
 }
 
 func (r *RHAFPortalCoreReconciler) reconcileWorkload(ctx context.Context, core *rhafv1alpha1.RHAFPortalCore) (ctrl.Result, error) {
-	active, err := r.activeInstallation(ctx, core.Namespace)
+	active, err := r.activeInstallation(ctx)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	if active != core.Name {
 		setCondition(core, rhafv1alpha1.ConditionConfigValid, metav1.ConditionFalse, reasonDuplicateInstallation,
-			fmt.Sprintf("RHAFPortalCore %q already manages this namespace", active))
+			fmt.Sprintf("RHAFPortalCore %q is the active installation", active))
 		setCondition(core, rhafv1alpha1.ConditionCoreAvailable, metav1.ConditionFalse, reasonNotDeployed,
 			"This installation is not active")
 
 		return ctrl.Result{}, nil
 	}
-
 	if err := r.ensureDataPVC(ctx, core); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -138,7 +139,7 @@ func (r *RHAFPortalCoreReconciler) reconcileWorkload(ctx context.Context, core *
 	}
 	setCondition(core, rhafv1alpha1.ConditionConfigValid, metav1.ConditionTrue, reasonValid, "Configuration is valid")
 
-	deployment := &appsv1.Deployment{Name: coreDeploymentName, Namespace: core.Namespace}
+	deployment := &appsv1.Deployment{Name: coreDeploymentName, Namespace: r.WorkloadNamespace}
 	waiting, err := r.previousCoreRunning(ctx, deployment)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -158,6 +159,52 @@ func (r *RHAFPortalCoreReconciler) reconcileWorkload(ctx context.Context, core *
 	}
 
 	return r.reportAvailability(ctx, core)
+}
+
+// activeInstallation keeps the current workload owner active. If nothing is
+// owned yet, the oldest Core resource wins, with its name as the tie-breaker.
+func (r *RHAFPortalCoreReconciler) activeInstallation(ctx context.Context) (string, error) {
+	cores := &rhafv1alpha1.RHAFPortalCoreList{}
+	if err := r.List(ctx, cores); err != nil {
+		return "", fmt.Errorf("list installations: %w", err)
+	}
+	if len(cores.Items) == 0 {
+		return "", nil
+	}
+	if len(cores.Items) == 1 {
+		return cores.Items[0].Name, nil
+	}
+
+	managed := []client.Object{
+		&appsv1.Deployment{Name: coreDeploymentName, Namespace: r.WorkloadNamespace},
+		&corev1.Service{Name: coreManagementServiceName, Namespace: r.WorkloadNamespace},
+		&corev1.Service{Name: coreMCPServiceName, Namespace: r.WorkloadNamespace},
+	}
+	for _, object := range managed {
+		err := r.Get(ctx, client.ObjectKeyFromObject(object), object)
+		if apierrors.IsNotFound(err) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("get %s: %w", object.GetName(), err)
+		}
+		owner := metav1.GetControllerOf(object)
+		if owner != nil && slices.ContainsFunc(cores.Items, func(core rhafv1alpha1.RHAFPortalCore) bool {
+			return core.UID == owner.UID
+		}) {
+			return owner.Name, nil
+		}
+	}
+
+	oldest := slices.MinFunc(cores.Items, func(left, right rhafv1alpha1.RHAFPortalCore) int {
+		if order := left.CreationTimestamp.Compare(right.CreationTimestamp.Time); order != 0 {
+			return order
+		}
+
+		return strings.Compare(left.Name, right.Name)
+	})
+
+	return oldest.Name, nil
 }
 
 // previousCoreRunning reports whether the Core Deployment must not be created yet
@@ -181,60 +228,14 @@ func (r *RHAFPortalCoreReconciler) previousCoreRunning(ctx context.Context, depl
 	}), nil
 }
 
-// activeInstallation returns the name of the RHAFPortalCore that manages the
-// namespace. An installation that controls the Core Deployment or one of the Core
-// Services stays active. Otherwise the oldest object is active, with the name as a
-// tie-breaker.
-func (r *RHAFPortalCoreReconciler) activeInstallation(ctx context.Context, namespace string) (string, error) {
-	cores := &rhafv1alpha1.RHAFPortalCoreList{}
-	if err := r.List(ctx, cores, client.InNamespace(namespace)); err != nil {
-		return "", fmt.Errorf("list installations: %w", err)
-	}
-	if len(cores.Items) == 0 {
-		return "", nil
-	}
-
-	managed := []client.Object{
-		&appsv1.Deployment{Name: coreDeploymentName, Namespace: namespace},
-		&corev1.Service{Name: coreManagementServiceName, Namespace: namespace},
-		&corev1.Service{Name: coreMCPServiceName, Namespace: namespace},
-	}
-	for _, object := range managed {
-		err := r.Get(ctx, client.ObjectKeyFromObject(object), object)
-		if apierrors.IsNotFound(err) {
-			continue
-		}
-		if err != nil {
-			return "", fmt.Errorf("get %s: %w", object.GetName(), err)
-		}
-		if owner := metav1.GetControllerOf(object); owner != nil {
-			for _, core := range cores.Items {
-				if core.UID == owner.UID {
-					return core.Name, nil
-				}
-			}
-		}
-	}
-
-	oldest := slices.MinFunc(cores.Items, func(left, right rhafv1alpha1.RHAFPortalCore) int {
-		if order := left.CreationTimestamp.Compare(right.CreationTimestamp.Time); order != 0 {
-			return order
-		}
-
-		return strings.Compare(left.Name, right.Name)
-	})
-
-	return oldest.Name, nil
-}
-
 // ensureDataPVC creates the data claim once. Size and storage class are not
 // updated afterwards because most of the claim specification is immutable.
 func (r *RHAFPortalCoreReconciler) ensureDataPVC(ctx context.Context, core *rhafv1alpha1.RHAFPortalCore) error {
-	err := r.Get(ctx, types.NamespacedName{Name: coreDataPVCName, Namespace: core.Namespace}, &corev1.PersistentVolumeClaim{})
+	err := r.Get(ctx, types.NamespacedName{Name: coreDataPVCName, Namespace: r.WorkloadNamespace}, &corev1.PersistentVolumeClaim{})
 	if !apierrors.IsNotFound(err) {
 		return err
 	}
-	if err := r.Create(ctx, newDataPVC(core)); err != nil && !apierrors.IsAlreadyExists(err) {
+	if err := r.Create(ctx, newDataPVC(core, r.WorkloadNamespace)); err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create data PVC: %w", err)
 	}
 
@@ -242,7 +243,7 @@ func (r *RHAFPortalCoreReconciler) ensureDataPVC(ctx context.Context, core *rhaf
 }
 
 func (r *RHAFPortalCoreReconciler) applyService(ctx context.Context, core *rhafv1alpha1.RHAFPortalCore, name, portName string, port int32) error {
-	service := &corev1.Service{Name: name, Namespace: core.Namespace}
+	service := &corev1.Service{Name: name, Namespace: r.WorkloadNamespace}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, service, func() error {
 		mutateService(service, core, portName, port)
 
@@ -263,7 +264,7 @@ func (r *RHAFPortalCoreReconciler) resolveWanakuConfig(ctx context.Context, core
 
 	reference := core.Spec.WanakuConfig.ConfigMapRef
 	configMap := &corev1.ConfigMap{}
-	err := r.APIReader.Get(ctx, types.NamespacedName{Name: reference.Name, Namespace: core.Namespace}, configMap)
+	err := r.APIReader.Get(ctx, types.NamespacedName{Name: reference.Name, Namespace: r.WorkloadNamespace}, configMap)
 	if apierrors.IsNotFound(err) {
 		return "", reasonConfigMapNotFound, fmt.Sprintf("ConfigMap %q does not exist", reference.Name), nil
 	}
@@ -282,7 +283,7 @@ func (r *RHAFPortalCoreReconciler) resolveWanakuConfig(ctx context.Context, core
 // reportAvailability sets CoreAvailable from the Deployment and Core pod state.
 func (r *RHAFPortalCoreReconciler) reportAvailability(ctx context.Context, core *rhafv1alpha1.RHAFPortalCore) (ctrl.Result, error) {
 	deployment := &appsv1.Deployment{}
-	err := r.Get(ctx, types.NamespacedName{Name: coreDeploymentName, Namespace: core.Namespace}, deployment)
+	err := r.Get(ctx, types.NamespacedName{Name: coreDeploymentName, Namespace: r.WorkloadNamespace}, deployment)
 	if apierrors.IsNotFound(err) {
 		setCondition(core, rhafv1alpha1.ConditionCoreAvailable, metav1.ConditionFalse, reasonNotDeployed, "The Core Deployment does not exist")
 
@@ -298,7 +299,7 @@ func (r *RHAFPortalCoreReconciler) reportAvailability(ctx context.Context, core 
 		return ctrl.Result{}, nil
 	}
 
-	reason, message, err := r.podFailure(ctx, core)
+	reason, message, err := r.podFailure(ctx)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -329,9 +330,9 @@ func deploymentAvailable(deployment *appsv1.Deployment) bool {
 }
 
 // podFailure returns the waiting or termination reason of a failing Core container.
-func (r *RHAFPortalCoreReconciler) podFailure(ctx context.Context, core *rhafv1alpha1.RHAFPortalCore) (string, string, error) {
+func (r *RHAFPortalCoreReconciler) podFailure(ctx context.Context) (string, string, error) {
 	pods := &corev1.PodList{}
-	if err := r.APIReader.List(ctx, pods, client.InNamespace(core.Namespace), client.MatchingLabels(coreSelectorLabels())); err != nil {
+	if err := r.APIReader.List(ctx, pods, client.InNamespace(r.WorkloadNamespace), client.MatchingLabels(coreSelectorLabels())); err != nil {
 		return "", "", fmt.Errorf("list Core pods: %w", err)
 	}
 
@@ -362,45 +363,34 @@ func setCondition(core *rhafv1alpha1.RHAFPortalCore, conditionType string, statu
 	})
 }
 
-func indexWanakuConfigMap(object client.Object) []string {
-	core, ok := object.(*rhafv1alpha1.RHAFPortalCore)
-	if !ok || core.Spec.WanakuConfig == nil {
-		return nil
-	}
-
-	return []string{core.Spec.WanakuConfig.ConfigMapRef.Name}
-}
-
-// coresForConfigMap enqueues the installations that reference a ConfigMap.
+// coresForConfigMap enqueues installations that reference the changed ConfigMap.
 func (r *RHAFPortalCoreReconciler) coresForConfigMap(ctx context.Context, configMap client.Object) []reconcile.Request {
-	cores := &rhafv1alpha1.RHAFPortalCoreList{}
-	if err := r.List(ctx, cores, client.InNamespace(configMap.GetNamespace()),
-		client.MatchingFields{wanakuConfigMapIndex: configMap.GetName()}); err != nil {
-		ctrl.LoggerFrom(ctx).Error(err, "list installations for ConfigMap", "configMap", configMap.GetName())
-
+	if configMap.GetNamespace() != r.WorkloadNamespace {
 		return nil
 	}
 
-	return requestsFor(cores.Items, "")
+	return r.requestsForCores(ctx, func(core *rhafv1alpha1.RHAFPortalCore) bool {
+		return core.Spec.WanakuConfig != nil && core.Spec.WanakuConfig.ConfigMapRef.Name == configMap.GetName()
+	})
 }
 
-// siblingCores enqueues the other installations in a namespace, so a waiting
-// duplicate becomes active when the active installation is removed.
-func (r *RHAFPortalCoreReconciler) siblingCores(ctx context.Context, object client.Object) []reconcile.Request {
+// remainingCores enqueues the other installations when one is deleted.
+func (r *RHAFPortalCoreReconciler) remainingCores(ctx context.Context, deleted client.Object) []reconcile.Request {
+	return r.requestsForCores(ctx, func(core *rhafv1alpha1.RHAFPortalCore) bool {
+		return core.Name != deleted.GetName()
+	})
+}
+
+func (r *RHAFPortalCoreReconciler) requestsForCores(ctx context.Context, matches func(*rhafv1alpha1.RHAFPortalCore) bool) []reconcile.Request {
 	cores := &rhafv1alpha1.RHAFPortalCoreList{}
-	if err := r.List(ctx, cores, client.InNamespace(object.GetNamespace())); err != nil {
-		ctrl.LoggerFrom(ctx).Error(err, "list sibling installations")
+	if err := r.List(ctx, cores); err != nil {
+		ctrl.LoggerFrom(ctx).Error(err, "list installations for event")
 
 		return nil
 	}
-
-	return requestsFor(cores.Items, object.GetName())
-}
-
-func requestsFor(cores []rhafv1alpha1.RHAFPortalCore, exclude string) []reconcile.Request {
-	requests := make([]reconcile.Request, 0, len(cores))
-	for _, core := range cores {
-		if core.Name != exclude {
+	var requests []reconcile.Request
+	for _, core := range cores.Items {
+		if matches(&core) {
 			requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&core)})
 		}
 	}
@@ -410,16 +400,15 @@ func requestsFor(cores []rhafv1alpha1.RHAFPortalCore, exclude string) []reconcil
 
 // SetupWithManager registers the controller with the manager.
 func (r *RHAFPortalCoreReconciler) SetupWithManager(manager ctrl.Manager) error {
-	if err := manager.GetFieldIndexer().IndexField(context.Background(), &rhafv1alpha1.RHAFPortalCore{},
-		wanakuConfigMapIndex, indexWanakuConfigMap); err != nil {
-		return fmt.Errorf("index installations by ConfigMap: %w", err)
-	}
-
 	return ctrl.NewControllerManagedBy(manager).
 		For(&rhafv1alpha1.RHAFPortalCore{}).
 		Owns(&appsv1.Deployment{}).
 		Owns(&corev1.Service{}).
 		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.coresForConfigMap), builder.OnlyMetadata).
-		Watches(&rhafv1alpha1.RHAFPortalCore{}, handler.EnqueueRequestsFromMapFunc(r.siblingCores)).
+		Watches(&rhafv1alpha1.RHAFPortalCore{}, handler.EnqueueRequestsFromMapFunc(r.remainingCores), builder.WithPredicates(predicate.Funcs{
+			CreateFunc:  func(event.CreateEvent) bool { return false },
+			UpdateFunc:  func(event.UpdateEvent) bool { return false },
+			GenericFunc: func(event.GenericEvent) bool { return false },
+		})).
 		Complete(r)
 }
